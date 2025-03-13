@@ -1,0 +1,29 @@
+version: '3'
+
+services:
+  simulator:
+    build:
+      context: ..
+      dockerfile: docker/simulator.Dockerfile
+    ports:
+      - "5000:5000"
+    volumes:
+      - ../device-simulator:/app
+    environment:
+      - FLASK_ENV=development
+      - PYTHONPATH=/app
+    restart: unless-stopped
+
+  dashboard:
+    build:
+      context: ..
+      dockerfile: docker/dashboard.Dockerfile
+    ports:
+      - "3000:3000"
+    volumes:
+      - ../dashboard/src:/app/src
+    depends_on:
+      - simulator
+    environment:
+      - REACT_APP_API_URL=http://localhost:5000
+    restart: unless-stopped

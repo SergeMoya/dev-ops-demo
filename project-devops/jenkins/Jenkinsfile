@@ -1,0 +1,167 @@
+pipeline {
+    agent any
+
+    environment {
+        DOCKER_REGISTRY = 'your-registry-url'
+        PROJECT_NAME = 'device-simulator'
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Python Setup') {
+            steps {
+                dir('device-simulator') {
+                    sh '''
+                        python -m pip install --upgrade pip
+                        pip install -r requirements.txt
+                        pip install -e .
+                        pip install pylint pytest-cov bandit
+                    '''
+                }
+            }
+        }
+
+        stage('Python Quality Checks') {
+            parallel {
+                stage('Lint') {
+                    steps {
+                        dir('device-simulator') {
+                            sh 'pylint device_simulator --exit-zero > pylint-report.txt'
+                        }
+                    }
+                    post {
+                        always {
+                            archiveArtifacts 'device-simulator/pylint-report.txt'
+                        }
+                    }
+                }
+                stage('Security Scan') {
+                    steps {
+                        dir('device-simulator') {
+                            sh 'bandit -r device_simulator -f html -o bandit-report.html'
+                        }
+                    }
+                    post {
+                        always {
+                            archiveArtifacts 'device-simulator/bandit-report.html'
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Python Tests') {
+            steps {
+                dir('device-simulator') {
+                    sh 'pytest tests/ -v --junitxml=test-results.xml --cov=device_simulator --cov-report=html --cov-report=xml'
+                }
+            }
+            post {
+                always {
+                    junit 'device-simulator/test-results.xml'
+                    archiveArtifacts 'device-simulator/htmlcov/**'
+                    publishCoverage(
+                        adapters: [coberturaAdapter('device-simulator/coverage.xml')]
+                    )
+                }
+            }
+        }
+
+        stage('Dashboard Setup') {
+            steps {
+                dir('dashboard') {
+                    sh 'npm install'
+                }
+            }
+        }
+
+        stage('Dashboard Quality Checks') {
+            steps {
+                dir('dashboard') {
+                    sh 'npm run lint -- --format checkstyle -o eslint-report.xml || true'
+                }
+            }
+            post {
+                always {
+                    recordIssues(
+                        tools: [esLint(pattern: 'dashboard/eslint-report.xml')]
+                    )
+                }
+            }
+        }
+
+        stage('Dashboard Tests') {
+            steps {
+                dir('dashboard') {
+                    sh 'npm test -- --ci --coverage --reporters=default --reporters=jest-junit'
+                }
+            }
+            post {
+                always {
+                    junit 'dashboard/junit.xml'
+                    publishCoverage(
+                        adapters: [istanbulCoberturaAdapter('dashboard/coverage/cobertura-coverage.xml')]
+                    )
+                }
+            }
+        }
+
+        stage('Build Docker Images') {
+            steps {
+                dir('docker') {
+                    sh 'docker-compose build'
+                    sh '''
+                        docker scan simulator || true
+                        docker scan dashboard || true
+                    '''
+                }
+            }
+        }
+
+        stage('Deploy') {
+            when {
+                branch 'main'
+            }
+            environment {
+                DEPLOY_APPROVAL = input message: 'Deploy to production?',
+                    parameters: [choice(name: 'DEPLOY_ENV', choices: ['staging', 'production'], description: 'Select deployment environment')]
+            }
+            steps {
+                dir('docker') {
+                    sh 'docker-compose up -d'
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            script {
+                def message = "✅ Build #${BUILD_NUMBER} successful!\n" +
+                             "Branch: ${BRANCH_NAME}\n" +
+                             "Test Coverage and Quality Reports available in Jenkins"
+                echo message
+                // Uncomment and configure for your notification system
+                // slackSend(color: 'good', message: message)
+            }
+        }
+        failure {
+            script {
+                def message = "❌ Build #${BUILD_NUMBER} failed!\n" +
+                             "Branch: ${BRANCH_NAME}\n" +
+                             "Check Jenkins for details"
+                echo message
+                // Uncomment and configure for your notification system
+                // slackSend(color: 'danger', message: message)
+            }
+        }
+        always {
+            cleanWs()
+        }
+    }
+}

@@ -1,0 +1,38 @@
+- project:
+    name: project-devops
+    check:
+      jobs:
+        - python-tests
+        - dashboard-tests
+    gate:
+      jobs:
+        - python-tests
+        - dashboard-tests
+        - build-docker
+
+- job:
+    name: python-tests
+    parent: base
+    description: Run Python tests
+    run: |
+      cd device-simulator
+      pip install -r requirements.txt
+      pip install -e .
+      pytest tests/ -v
+
+- job:
+    name: dashboard-tests
+    parent: base
+    description: Run Dashboard tests
+    run: |
+      cd dashboard
+      npm install
+      npm test
+
+- job:
+    name: build-docker
+    parent: base
+    description: Build Docker images
+    run: |
+      cd docker
+      docker-compose build
